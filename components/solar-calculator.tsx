@@ -14,10 +14,12 @@ import { SavingsBreakdown } from "./savings-breakdown"
 import { EnvironmentalImpact } from "./environmental-impact"
 import { PanelSimulation } from "./panel-simulation"
 import { ReportGenerator } from "./report-generator"
+import { AdvancedPanelControls } from "./advanced-panel-controls"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import type { BuildingInsights } from "@/lib/types"
+import type { BuildingInsights, PanelConfig } from "@/lib/types"
+import { DEFAULT_PANEL_CONFIG } from "@/lib/types"
 import { getBuildingInsights, getOptimalPanelConfig } from "@/lib/solar-api"
 import { useGoogleMaps } from "@/hooks/use-google-maps"
 
@@ -33,6 +35,7 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showPanels, setShowPanels] = useState(true)
+  const [panelConfig, setPanelConfig] = useState<PanelConfig>(DEFAULT_PANEL_CONFIG)
 
   const { isLoaded: mapsLoaded, loadError: mapsError } = useGoogleMaps(apiKey)
 
@@ -173,6 +176,7 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                 solarPanels={buildingInsights?.solarPotential.solarPanels}
                 showPanels={showPanels && !!buildingInsights}
                 panelCount={selectedPanelCount}
+                panelConfig={panelConfig}
               />
             </div>
 
@@ -207,6 +211,7 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                   showPanels={showPanels}
                   onShowPanelsChange={setShowPanels}
                 />
+                <AdvancedPanelControls config={panelConfig} onConfigChange={setPanelConfig} />
                 <ReportGenerator
                   buildingInsights={buildingInsights}
                   selectedPanelCount={selectedPanelCount}

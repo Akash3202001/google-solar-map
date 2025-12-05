@@ -185,3 +185,21 @@ export interface SolarCalculation {
   loading: boolean
   error: string | null
 }
+
+export interface PanelConfig {
+  width: number // meters
+  height: number // meters
+  rotation: number // degrees 0-360
+  tilt: number // degrees 0-90
+  offsetX: number // meters offset from original position
+  offsetY: number // meters offset from original position
+}
+
+export const DEFAULT_PANEL_CONFIG: PanelConfig = {
+  width: 1.0, // ~1m standard panel width
+  height: 1.7, // ~1.7m standard panel height
+  rotation: 0,
+  tilt: 0,
+  offsetX: 0,
+  offsetY: 0,
+}
