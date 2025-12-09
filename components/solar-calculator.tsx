@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { Sun, AlertCircle, Loader2, Settings } from "lucide-react"
 import { AddressSearch } from "./address-search"
 import { SolarMap } from "./solar-map"
@@ -14,12 +14,12 @@ import { SavingsBreakdown } from "./savings-breakdown"
 import { EnvironmentalImpact } from "./environmental-impact"
 import { PanelSimulation } from "./panel-simulation"
 import { ReportGenerator } from "./report-generator"
-import { AdvancedPanelControls } from "./advanced-panel-controls"
+import { IndividualPanelEditor } from "./individual-panel-editor"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import type { BuildingInsights, PanelConfig } from "@/lib/types"
-import { DEFAULT_PANEL_CONFIG } from "@/lib/types"
+import type { BuildingInsights, IndividualPanelConfig } from "@/lib/types"
+import { createDefaultIndividualPanelConfig } from "@/lib/types"
 import { getBuildingInsights, getOptimalPanelConfig } from "@/lib/solar-api"
 import { useGoogleMaps } from "@/hooks/use-google-maps"
 
@@ -35,9 +35,23 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showPanels, setShowPanels] = useState(true)
-  const [panelConfig, setPanelConfig] = useState<PanelConfig>(DEFAULT_PANEL_CONFIG)
+
+  const [individualPanelConfigs, setIndividualPanelConfigs] = useState<IndividualPanelConfig[]>([])
+  const [selectedPanelId, setSelectedPanelId] = useState<number | null>(null)
 
   const { isLoaded: mapsLoaded, loadError: mapsError } = useGoogleMaps(apiKey)
+
+  useEffect(() => {
+    if (buildingInsights) {
+      const maxPanels = buildingInsights.solarPotential.maxArrayPanelsCount
+      const configs = Array.from({ length: maxPanels }, (_, i) => createDefaultIndividualPanelConfig(i))
+      setIndividualPanelConfigs(configs)
+      setSelectedPanelId(null)
+    } else {
+      setIndividualPanelConfigs([])
+      setSelectedPanelId(null)
+    }
+  }, [buildingInsights])
 
   const fetchSolarData = useCallback(
     async (lat: number, lng: number) => {
@@ -88,12 +102,66 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
     [buildingInsights],
   )
 
+  const handlePanelUpdate = useCallback((id: number, updates: Partial<IndividualPanelConfig>) => {
+    setIndividualPanelConfigs((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)))
+  }, [])
+
+  const handlePanelDelete = useCallback(
+    (id: number) => {
+      setIndividualPanelConfigs((prev) => prev.map((p) => (p.id === id ? { ...p, visible: false } : p)))
+      if (selectedPanelId === id) {
+        setSelectedPanelId(null)
+      }
+    },
+    [selectedPanelId],
+  )
+
+  const handlePanelAdd = useCallback(() => {
+    // Find a hidden panel and make it visible
+    setIndividualPanelConfigs((prev) => {
+      const hiddenPanel = prev.find((p) => !p.visible)
+      if (hiddenPanel) {
+        return prev.map((p) => (p.id === hiddenPanel.id ? { ...p, visible: true } : p))
+      }
+      return prev
+    })
+  }, [])
+
+  const handlePanelDuplicate = useCallback((id: number) => {
+    setIndividualPanelConfigs((prev) => {
+      const sourcePanelConfig = prev.find((p) => p.id === id)
+      if (!sourcePanelConfig) return prev
+
+      // Find a hidden panel to use for duplication
+      const hiddenPanel = prev.find((p) => !p.visible)
+      if (hiddenPanel) {
+        return prev.map((p) =>
+          p.id === hiddenPanel.id
+            ? { ...sourcePanelConfig, id: p.id, visible: true, offsetX: sourcePanelConfig.offsetX + 1 }
+            : p,
+        )
+      }
+      return prev
+    })
+  }, [])
+
+  const handleApplyToAll = useCallback((updates: Partial<IndividualPanelConfig>) => {
+    setIndividualPanelConfigs((prev) => prev.map((p) => ({ ...p, ...updates, id: p.id })))
+  }, [])
+
+  const handleResetAll = useCallback(() => {
+    setIndividualPanelConfigs((prev) => prev.map((p) => createDefaultIndividualPanelConfig(p.id)))
+    setSelectedPanelId(null)
+  }, [])
+
   const handleClearApiKey = () => {
     localStorage.removeItem("google-maps-api-key")
     window.location.reload()
   }
 
-  const systemCost = selectedPanelCount * 300
+  const visiblePanelCount = individualPanelConfigs.filter((p) => p.visible).length
+  const effectivePanelCount = Math.min(selectedPanelCount, visiblePanelCount)
+  const systemCost = effectivePanelCount * 300
 
   if (!mapsLoaded) {
     return (
@@ -122,6 +190,8 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
       </div>
     )
   }
+
+  const panelConfigsToShow = individualPanelConfigs.slice(0, selectedPanelCount)
 
   return (
     <div className="min-h-screen bg-background">
@@ -175,8 +245,9 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                 roofSegments={buildingInsights?.solarPotential.roofSegmentStats}
                 solarPanels={buildingInsights?.solarPotential.solarPanels}
                 showPanels={showPanels && !!buildingInsights}
-                panelCount={selectedPanelCount}
-                panelConfig={panelConfig}
+                individualPanelConfigs={panelConfigsToShow}
+                selectedPanelId={selectedPanelId}
+                onPanelClick={setSelectedPanelId}
               />
             </div>
 
@@ -201,7 +272,7 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
               <>
                 <SolarMetrics
                   buildingInsights={buildingInsights}
-                  selectedPanelCount={selectedPanelCount}
+                  selectedPanelCount={effectivePanelCount}
                   yearlyEnergy={yearlyEnergy}
                 />
                 <PanelSimulation
@@ -211,10 +282,21 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                   showPanels={showPanels}
                   onShowPanelsChange={setShowPanels}
                 />
-                <AdvancedPanelControls config={panelConfig} onConfigChange={setPanelConfig} />
+                <IndividualPanelEditor
+                  panels={panelConfigsToShow}
+                  selectedPanelId={selectedPanelId}
+                  onPanelSelect={setSelectedPanelId}
+                  onPanelUpdate={handlePanelUpdate}
+                  onPanelDelete={handlePanelDelete}
+                  onPanelAdd={handlePanelAdd}
+                  onPanelDuplicate={handlePanelDuplicate}
+                  onApplyToAll={handleApplyToAll}
+                  onResetAll={handleResetAll}
+                  maxPanels={buildingInsights.solarPotential.maxArrayPanelsCount}
+                />
                 <ReportGenerator
                   buildingInsights={buildingInsights}
-                  selectedPanelCount={selectedPanelCount}
+                  selectedPanelCount={effectivePanelCount}
                   yearlyEnergy={yearlyEnergy}
                   address={location?.address || ""}
                 />
@@ -241,18 +323,18 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
             </div>
 
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
-              <EnergyChart buildingInsights={buildingInsights} selectedPanelCount={selectedPanelCount} />
+              <EnergyChart buildingInsights={buildingInsights} selectedPanelCount={effectivePanelCount} />
               <RoofSegments segments={buildingInsights.solarPotential.roofSegmentStats} />
               <EnvironmentalImpact
                 yearlyEnergyKwh={yearlyEnergy}
                 carbonOffsetFactor={buildingInsights.solarPotential.carbonOffsetFactorKgPerMwh}
               />
-              <FinancialSummary buildingInsights={buildingInsights} selectedPanelCount={selectedPanelCount} />
+              <FinancialSummary buildingInsights={buildingInsights} selectedPanelCount={effectivePanelCount} />
             </div>
 
             {/* System Specs & Data Layers */}
             <div className="grid md:grid-cols-2 gap-6 mt-6">
-              <SystemSpecs buildingInsights={buildingInsights} selectedPanelCount={selectedPanelCount} />
+              <SystemSpecs buildingInsights={buildingInsights} selectedPanelCount={effectivePanelCount} />
               <DataLayersPanel location={location ? { lat: location.lat, lng: location.lng } : null} apiKey={apiKey} />
             </div>
           </>

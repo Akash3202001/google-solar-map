@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react"
 import { Loader2 } from "lucide-react"
-import type { PanelConfig } from "@/lib/types"
-import { DEFAULT_PANEL_CONFIG } from "@/lib/types"
+import type { IndividualPanelConfig } from "@/lib/types"
 import type { google } from "google-maps"
 
 interface SolarMapProps {
@@ -21,8 +20,9 @@ interface SolarMapProps {
     orientation: "PORTRAIT" | "LANDSCAPE"
   }[]
   showPanels?: boolean
-  panelCount?: number
-  panelConfig?: PanelConfig
+  individualPanelConfigs?: IndividualPanelConfig[]
+  selectedPanelId?: number | null
+  onPanelClick?: (panelId: number) => void
 }
 
 function metersToLatDegrees(meters: number): number {
@@ -60,7 +60,6 @@ function createRotatedPanelCoords(
   offsetXMeters: number,
   offsetYMeters: number,
 ): Array<{ lat: number; lng: number }> {
-  // Apply offset
   const offsetLat = metersToLatDegrees(offsetYMeters)
   const offsetLng = metersToLngDegrees(offsetXMeters, centerLat)
   const adjustedCenter = {
@@ -68,19 +67,16 @@ function createRotatedPanelCoords(
     lng: centerLng + offsetLng,
   }
 
-  // Convert dimensions to degrees
   const halfWidthDeg = metersToLngDegrees(widthMeters / 2, adjustedCenter.lat)
   const halfHeightDeg = metersToLatDegrees(heightMeters / 2)
 
-  // Create corner points (before rotation)
   const corners = [
-    { lat: adjustedCenter.lat - halfHeightDeg, lng: adjustedCenter.lng - halfWidthDeg }, // SW
-    { lat: adjustedCenter.lat - halfHeightDeg, lng: adjustedCenter.lng + halfWidthDeg }, // SE
-    { lat: adjustedCenter.lat + halfHeightDeg, lng: adjustedCenter.lng + halfWidthDeg }, // NE
-    { lat: adjustedCenter.lat + halfHeightDeg, lng: adjustedCenter.lng - halfWidthDeg }, // NW
+    { lat: adjustedCenter.lat - halfHeightDeg, lng: adjustedCenter.lng - halfWidthDeg },
+    { lat: adjustedCenter.lat - halfHeightDeg, lng: adjustedCenter.lng + halfWidthDeg },
+    { lat: adjustedCenter.lat + halfHeightDeg, lng: adjustedCenter.lng + halfWidthDeg },
+    { lat: adjustedCenter.lat + halfHeightDeg, lng: adjustedCenter.lng - halfWidthDeg },
   ]
 
-  // Rotate each corner around the adjusted center
   return corners.map((corner) => rotatePoint(corner, adjustedCenter, rotationDegrees))
 }
 
@@ -90,8 +86,9 @@ export function SolarMap({
   roofSegments,
   solarPanels,
   showPanels = true,
-  panelCount = 0,
-  panelConfig = DEFAULT_PANEL_CONFIG,
+  individualPanelConfigs,
+  selectedPanelId,
+  onPanelClick,
 }: SolarMapProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<google.maps.Map | null>(null)
@@ -195,18 +192,21 @@ export function SolarMap({
 
     clearPanelPolygons()
 
-    if (!solarPanels || !showPanels) {
+    if (!solarPanels || !showPanels || !individualPanelConfigs) {
       return
     }
 
-    const panelsToShow = solarPanels.slice(0, panelCount)
+    individualPanelConfigs.forEach((panelConfig, index) => {
+      // Skip if panel is hidden or no corresponding solar panel data
+      if (!panelConfig.visible || index >= solarPanels.length) return
 
-    panelsToShow.forEach((panel) => {
+      const panel = solarPanels[index]
+
       // Determine base dimensions based on orientation
       const baseWidth = panel.orientation === "LANDSCAPE" ? panelConfig.height : panelConfig.width
       const baseHeight = panel.orientation === "LANDSCAPE" ? panelConfig.width : panelConfig.height
 
-      // Create rotated polygon coordinates
+      // Create rotated polygon coordinates with individual config
       const coords = createRotatedPanelCoords(
         panel.center.latitude,
         panel.center.longitude,
@@ -217,19 +217,30 @@ export function SolarMap({
         panelConfig.offsetY,
       )
 
+      // Different styling for selected panel
+      const isSelected = selectedPanelId === panelConfig.id
+
       const polygon = new window.google.maps.Polygon({
         paths: coords,
         map: mapInstanceRef.current,
-        strokeColor: "#3b82f6",
-        strokeOpacity: 0.9,
-        strokeWeight: 1,
-        fillColor: "#1e3a8a",
-        fillOpacity: 0.7,
+        strokeColor: isSelected ? "#fbbf24" : "#3b82f6",
+        strokeOpacity: 1,
+        strokeWeight: isSelected ? 3 : 1,
+        fillColor: isSelected ? "#fbbf24" : "#1e3a8a",
+        fillOpacity: isSelected ? 0.8 : 0.7,
+        clickable: true,
+        zIndex: isSelected ? 10 : 1,
+      })
+
+      // Add click listener for panel selection
+      polygon.addListener("click", (e: google.maps.MapMouseEvent) => {
+        e.stop?.()
+        onPanelClick?.(panelConfig.id)
       })
 
       panelPolygonsRef.current.push(polygon)
     })
-  }, [solarPanels, showPanels, panelCount, panelConfig, clearPanelPolygons, mapReady])
+  }, [solarPanels, showPanels, individualPanelConfigs, selectedPanelId, onPanelClick, clearPanelPolygons, mapReady])
 
   return (
     <div className="relative w-full h-full min-h-[400px] rounded-lg overflow-hidden">

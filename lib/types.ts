@@ -195,6 +195,11 @@ export interface PanelConfig {
   offsetY: number // meters offset from original position
 }
 
+export interface IndividualPanelConfig extends PanelConfig {
+  id: number
+  visible: boolean
+}
+
 export const DEFAULT_PANEL_CONFIG: PanelConfig = {
   width: 1.0, // ~1m standard panel width
   height: 1.7, // ~1.7m standard panel height
@@ -203,3 +208,9 @@ export const DEFAULT_PANEL_CONFIG: PanelConfig = {
   offsetX: 0,
   offsetY: 0,
 }
+
+export const createDefaultIndividualPanelConfig = (id: number): IndividualPanelConfig => ({
+  ...DEFAULT_PANEL_CONFIG,
+  id,
+  visible: true,
+})
