@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react"
 import { Loader2 } from "lucide-react"
 import type { IndividualPanelConfig } from "@/lib/types"
+import { isPanelInPolygon } from "@/lib/geometry-utils"
 import type { google } from "google-maps"
 
 interface SolarMapProps {
@@ -23,6 +24,10 @@ interface SolarMapProps {
   individualPanelConfigs?: IndividualPanelConfig[]
   selectedPanelId?: number | null
   onPanelClick?: (panelId: number) => void
+  isEditingRoof?: boolean
+  roofPolygon?: Array<{ lat: number; lng: number }>
+  onRoofPolygonChange?: (polygon: Array<{ lat: number; lng: number }>) => void
+  onPanelBoundsCheck?: (panelId: number, isInBounds: boolean) => void
 }
 
 function metersToLatDegrees(meters: number): number {
@@ -89,14 +94,21 @@ export function SolarMap({
   individualPanelConfigs,
   selectedPanelId,
   onPanelClick,
+  isEditingRoof = false,
+  roofPolygon,
+  onRoofPolygonChange,
+  onPanelBoundsCheck,
 }: SolarMapProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<google.maps.Map | null>(null)
   const markersRef = useRef<google.maps.Marker[]>([])
   const polygonsRef = useRef<google.maps.Rectangle[]>([])
   const panelPolygonsRef = useRef<google.maps.Polygon[]>([])
+  const roofPolygonRef = useRef<google.maps.Polygon | null>(null)
+  const roofMarkersRef = useRef<google.maps.Marker[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mapReady, setMapReady] = useState(false)
+  const prevBoundsStatusRef = useRef<Map<number, boolean>>(new Map())
 
   const clearMarkers = useCallback(() => {
     markersRef.current.forEach((marker) => marker.setMap(null))
@@ -113,7 +125,6 @@ export function SolarMap({
     panelPolygonsRef.current = []
   }, [])
 
-  // Initialize map
   useEffect(() => {
     if (!mapRef.current || !window.google?.maps || mapInstanceRef.current) return
 
@@ -143,7 +154,6 @@ export function SolarMap({
     setMapReady(true)
   }, [])
 
-  // Update center when it changes
   useEffect(() => {
     if (!mapInstanceRef.current || !center || !window.google?.maps) return
 
@@ -159,7 +169,6 @@ export function SolarMap({
     markersRef.current.push(marker)
   }, [center, clearMarkers, mapReady])
 
-  // Draw roof segments
   useEffect(() => {
     if (!mapInstanceRef.current || !roofSegments || !window.google?.maps) return
 
@@ -186,6 +195,59 @@ export function SolarMap({
   }, [roofSegments, clearPolygons, mapReady])
 
   useEffect(() => {
+    if (!mapInstanceRef.current || !roofPolygon || !window.google?.maps) return
+
+    if (roofPolygonRef.current) {
+      roofPolygonRef.current.setMap(null)
+    }
+    roofMarkersRef.current.forEach((marker) => marker.setMap(null))
+    roofMarkersRef.current = []
+
+    const polygon = new window.google.maps.Polygon({
+      paths: roofPolygon,
+      map: mapInstanceRef.current,
+      strokeColor: "#f97316",
+      strokeOpacity: 0.9,
+      strokeWeight: 3,
+      fillColor: "#f97316",
+      fillOpacity: 0.15,
+      clickable: false,
+      zIndex: 0,
+    })
+    roofPolygonRef.current = polygon
+
+    if (isEditingRoof) {
+      roofPolygon.forEach((point, index) => {
+        const marker = new window.google.maps.Marker({
+          position: point,
+          map: mapInstanceRef.current,
+          draggable: true,
+          icon: {
+            path: window.google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#fbbf24",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2,
+          },
+          zIndex: 100,
+        })
+
+        marker.addListener("drag", () => {
+          const newPosition = marker.getPosition()
+          if (newPosition && onRoofPolygonChange) {
+            const newPolygon = [...roofPolygon]
+            newPolygon[index] = { lat: newPosition.lat(), lng: newPosition.lng() }
+            onRoofPolygonChange(newPolygon)
+          }
+        })
+
+        roofMarkersRef.current.push(marker)
+      })
+    }
+  }, [roofPolygon, isEditingRoof, onRoofPolygonChange, mapReady])
+
+  useEffect(() => {
     if (!mapInstanceRef.current || !window.google?.maps) {
       return
     }
@@ -196,17 +258,16 @@ export function SolarMap({
       return
     }
 
+    const newBoundsStatus = new Map<number, boolean>()
+
     individualPanelConfigs.forEach((panelConfig, index) => {
-      // Skip if panel is hidden or no corresponding solar panel data
       if (!panelConfig.visible || index >= solarPanels.length) return
 
       const panel = solarPanels[index]
 
-      // Determine base dimensions based on orientation
       const baseWidth = panel.orientation === "LANDSCAPE" ? panelConfig.height : panelConfig.width
       const baseHeight = panel.orientation === "LANDSCAPE" ? panelConfig.width : panelConfig.height
 
-      // Create rotated polygon coordinates with individual config
       const coords = createRotatedPanelCoords(
         panel.center.latitude,
         panel.center.longitude,
@@ -217,22 +278,23 @@ export function SolarMap({
         panelConfig.offsetY,
       )
 
-      // Different styling for selected panel
+      const isInBounds = !roofPolygon || isPanelInPolygon(coords, roofPolygon)
+      newBoundsStatus.set(panelConfig.id, isInBounds)
+
       const isSelected = selectedPanelId === panelConfig.id
 
       const polygon = new window.google.maps.Polygon({
         paths: coords,
         map: mapInstanceRef.current,
-        strokeColor: isSelected ? "#fbbf24" : "#3b82f6",
+        strokeColor: isSelected ? "#fbbf24" : isInBounds ? "#3b82f6" : "#ef4444",
         strokeOpacity: 1,
-        strokeWeight: isSelected ? 3 : 1,
-        fillColor: isSelected ? "#fbbf24" : "#1e3a8a",
-        fillOpacity: isSelected ? 0.8 : 0.7,
+        strokeWeight: isSelected ? 3 : isInBounds ? 1 : 2,
+        fillColor: isSelected ? "#fbbf24" : isInBounds ? "#1e3a8a" : "#7f1d1d",
+        fillOpacity: isSelected ? 0.8 : isInBounds ? 0.7 : 0.6,
         clickable: true,
-        zIndex: isSelected ? 10 : 1,
+        zIndex: isSelected ? 10 : isInBounds ? 1 : 2,
       })
 
-      // Add click listener for panel selection
       polygon.addListener("click", (e: google.maps.MapMouseEvent) => {
         e.stop?.()
         onPanelClick?.(panelConfig.id)
@@ -240,7 +302,39 @@ export function SolarMap({
 
       panelPolygonsRef.current.push(polygon)
     })
-  }, [solarPanels, showPanels, individualPanelConfigs, selectedPanelId, onPanelClick, clearPanelPolygons, mapReady])
+
+    if (onPanelBoundsCheck) {
+      let hasChanges = false
+
+      for (const [id, isInBounds] of newBoundsStatus.entries()) {
+        if (prevBoundsStatusRef.current.get(id) !== isInBounds) {
+          hasChanges = true
+          break
+        }
+      }
+
+      if (!hasChanges && prevBoundsStatusRef.current.size !== newBoundsStatus.size) {
+        hasChanges = true
+      }
+
+      if (hasChanges) {
+        prevBoundsStatusRef.current = newBoundsStatus
+        newBoundsStatus.forEach((isInBounds, id) => {
+          onPanelBoundsCheck(id, isInBounds)
+        })
+      }
+    }
+  }, [
+    solarPanels,
+    showPanels,
+    individualPanelConfigs,
+    selectedPanelId,
+    onPanelClick,
+    clearPanelPolygons,
+    mapReady,
+    roofPolygon,
+    onPanelBoundsCheck,
+  ])
 
   return (
     <div className="relative w-full h-full min-h-[400px] rounded-lg overflow-hidden">

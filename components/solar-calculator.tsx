@@ -15,12 +15,14 @@ import { EnvironmentalImpact } from "./environmental-impact"
 import { PanelSimulation } from "./panel-simulation"
 import { ReportGenerator } from "./report-generator"
 import { IndividualPanelEditor } from "./individual-panel-editor"
+import { RoofPolygonEditor } from "./roof-polygon-editor"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import type { BuildingInsights, IndividualPanelConfig } from "@/lib/types"
 import { createDefaultIndividualPanelConfig } from "@/lib/types"
 import { getBuildingInsights, getOptimalPanelConfig } from "@/lib/solar-api"
+import { getPolygonBounds } from "@/lib/geometry-utils"
 import { useGoogleMaps } from "@/hooks/use-google-maps"
 
 interface SolarCalculatorProps {
@@ -39,19 +41,59 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
   const [individualPanelConfigs, setIndividualPanelConfigs] = useState<IndividualPanelConfig[]>([])
   const [selectedPanelId, setSelectedPanelId] = useState<number | null>(null)
 
+  const [isEditingRoof, setIsEditingRoof] = useState(false)
+  const [roofPolygon, setRoofPolygon] = useState<Array<{ lat: number; lng: number }> | null>(null)
+  const [panelBoundsStatus, setPanelBoundsStatus] = useState<Map<number, boolean>>(new Map())
+
   const { isLoaded: mapsLoaded, loadError: mapsError } = useGoogleMaps(apiKey)
 
   useEffect(() => {
-    if (buildingInsights) {
+    if (buildingInsights && buildingInsights.solarPotential.roofSegmentStats.length > 0) {
+      const segment = buildingInsights.solarPotential.roofSegmentStats[0]
+      const initialPolygon = [
+        { lat: segment.boundingBox.sw.latitude, lng: segment.boundingBox.sw.longitude },
+        { lat: segment.boundingBox.sw.latitude, lng: segment.boundingBox.ne.longitude },
+        { lat: segment.boundingBox.ne.latitude, lng: segment.boundingBox.ne.longitude },
+        { lat: segment.boundingBox.ne.latitude, lng: segment.boundingBox.sw.longitude },
+      ]
+      setRoofPolygon(initialPolygon)
+
       const maxPanels = buildingInsights.solarPotential.maxArrayPanelsCount
       const configs = Array.from({ length: maxPanels }, (_, i) => createDefaultIndividualPanelConfig(i))
       setIndividualPanelConfigs(configs)
       setSelectedPanelId(null)
     } else {
+      setRoofPolygon(null)
       setIndividualPanelConfigs([])
       setSelectedPanelId(null)
     }
   }, [buildingInsights])
+
+  const handlePanelBoundsCheck = useCallback((panelId: number, isInBounds: boolean) => {
+    setPanelBoundsStatus((prev) => {
+      const updated = new Map(prev)
+      updated.set(panelId, isInBounds)
+      return updated
+    })
+  }, [])
+
+  const hasOutOfBoundsPanels = Array.from(panelBoundsStatus.values()).some((inBounds) => !inBounds)
+
+  const handleAutoFitPanels = useCallback(() => {
+    if (!roofPolygon || !buildingInsights) return
+
+    const bounds = getPolygonBounds(roofPolygon)
+
+    setIndividualPanelConfigs((prev) =>
+      prev.map((panel) => {
+        return {
+          ...panel,
+          offsetX: 0,
+          offsetY: 0,
+        }
+      }),
+    )
+  }, [roofPolygon, buildingInsights])
 
   const fetchSolarData = useCallback(
     async (lat: number, lng: number) => {
@@ -117,7 +159,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
   )
 
   const handlePanelAdd = useCallback(() => {
-    // Find a hidden panel and make it visible
     setIndividualPanelConfigs((prev) => {
       const hiddenPanel = prev.find((p) => !p.visible)
       if (hiddenPanel) {
@@ -132,7 +173,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
       const sourcePanelConfig = prev.find((p) => p.id === id)
       if (!sourcePanelConfig) return prev
 
-      // Find a hidden panel to use for duplication
       const hiddenPanel = prev.find((p) => !p.visible)
       if (hiddenPanel) {
         return prev.map((p) =>
@@ -195,7 +235,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container flex h-16 items-center justify-between px-4">
           <div className="flex items-center gap-2">
@@ -220,12 +259,10 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
         </div>
       </header>
 
-      {/* Mobile Search */}
       <div className="md:hidden p-4 border-b border-border bg-card">
         <AddressSearch onSelectLocation={handleLocationSelect} />
       </div>
 
-      {/* Main Content */}
       <main className="container px-4 py-6">
         {error && (
           <Alert variant="destructive" className="mb-6">
@@ -236,7 +273,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
         )}
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Map Section */}
           <div className="lg:col-span-2 space-y-4">
             <div className="h-[400px] lg:h-[500px] rounded-lg overflow-hidden border border-border">
               <SolarMap
@@ -248,6 +284,10 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                 individualPanelConfigs={panelConfigsToShow}
                 selectedPanelId={selectedPanelId}
                 onPanelClick={setSelectedPanelId}
+                isEditingRoof={isEditingRoof}
+                roofPolygon={roofPolygon || undefined}
+                onRoofPolygonChange={setRoofPolygon}
+                onPanelBoundsCheck={handlePanelBoundsCheck}
               />
             </div>
 
@@ -266,7 +306,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
             )}
           </div>
 
-          {/* Results Sidebar */}
           <div className="space-y-4">
             {buildingInsights ? (
               <>
@@ -274,6 +313,12 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
                   buildingInsights={buildingInsights}
                   selectedPanelCount={effectivePanelCount}
                   yearlyEnergy={yearlyEnergy}
+                />
+                <RoofPolygonEditor
+                  isEditing={isEditingRoof}
+                  onEditToggle={setIsEditingRoof}
+                  hasOutOfBoundsPanels={hasOutOfBoundsPanels}
+                  onAutoFitPanels={handleAutoFitPanels}
                 />
                 <PanelSimulation
                   buildingInsights={buildingInsights}
@@ -315,7 +360,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
           </div>
         </div>
 
-        {/* Additional Analysis - Enhanced Grid */}
         {buildingInsights && (
           <>
             <div className="mt-6">
@@ -332,7 +376,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
               <FinancialSummary buildingInsights={buildingInsights} selectedPanelCount={effectivePanelCount} />
             </div>
 
-            {/* System Specs & Data Layers */}
             <div className="grid md:grid-cols-2 gap-6 mt-6">
               <SystemSpecs buildingInsights={buildingInsights} selectedPanelCount={effectivePanelCount} />
               <DataLayersPanel location={location ? { lat: location.lat, lng: location.lng } : null} apiKey={apiKey} />
@@ -341,7 +384,6 @@ export function SolarCalculator({ apiKey }: SolarCalculatorProps) {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-border bg-card mt-12">
         <div className="container px-4 py-6">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
